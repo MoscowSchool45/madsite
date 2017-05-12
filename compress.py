@@ -92,7 +92,6 @@ hashes = []
 for d in dirs:
     hashes.append(d['hash'])
     print("{}:\t{}".format(n+1, d['name']))
-    print(d)
     n=n+1
 
 process = []

@@ -1,0 +1,5 @@
+beautifulsoup4==4.6.0
+olefile==0.44
+Pillow==4.1.1
+requests==2.14.2
+xlrd==1.0.0
