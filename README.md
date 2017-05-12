@@ -25,3 +25,5 @@ In our school, a necessity of integrating some local databases with the site has
 Для работы сценария compress.py у вас на компьютере должен быть установлен ghostscript (https://www.ghostscript.com/) — этот замечательный пакет используется для сжатия pdf-ок.
 
 В простейшем случае, compress.py запускается с единственным аргументом - именем сайта (__sitename__.mskobr.ru); остальные параметры задаются в интерактивном режиме.
+
+Например: `compress.py sch45uz`
