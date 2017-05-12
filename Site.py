@@ -3,7 +3,10 @@ import requests
 import json
 import mimetypes
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
+import os.path
+import traceback
 
 
 class Fieldset(object):
@@ -78,13 +81,83 @@ class Teacher(Fieldset):
     ]
 
 
+class SiteTree():
+    def __init__(self, site, timeout=10, dump=None):
+        self.timeout = timeout
+        self.site = site
+        self.seen = []
+        self.dump = dump
+
+    def process_url(self, url, referer):
+        if url.strip() == '':
+            return None
+        else:
+            url = url.strip()
+        p = urlparse(url)
+        if p.scheme not in ['','http', 'https']:
+            return None
+        if p.netloc == '' or p.netloc == self.site:
+            if len(p.path) == 0:
+                return None
+            if p.path[0] == '/':
+                return p.path
+            else:
+                parent = urlparse(referer)
+                location = os.path.split(parent.netloc)
+                if len(parent.netloc) > 0 and parent.netloc[-1] != '/':
+                    location = location[:-1]
+                path = os.path.join(*location, p.path)
+                return path
+        else:
+            return None
+
+    def process_page(self, page, rec=0, max=20):
+        r = requests.get("{}://{}/{}".format("http", self.site, page), timeout=self.timeout)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        links = []
+        for a in soup.findAll("a"):
+            try:
+                link = self.process_url(a['href'], page)
+                if link is not None:
+                    links.append(link)
+            except KeyError as e:
+                pass
+        for img in soup.findAll("img"):
+            try:
+                link = self.process_url(img['src'], page)
+                if link is not None:
+                    links.append(link)
+            except KeyError as e:
+                pass
+        self.seen.append(page)
+        unseen = []
+        for link in links:
+            if not link in self.seen:
+                unseen.append(link)
+                if self.dump is not None:
+                    self.dump.write("{}\n".format(link))
+                    self.dump.flush()
+        print("Processed {} at level {}. Found {} links, {} unseen.".format(page, rec, len(links), len(unseen)))
+        if rec > max:
+            return links
+        for link in unseen:
+            self.process_page(link, rec+1, max)
+        return links
+
+
 class SiteHandler():
     def __init__(self, login, password, site, timeout = 10):
         self.timeout = timeout
+        self.site = site
         r = requests.get("{}://{}/{}".format("http", site, ""), timeout=self.timeout)
         self.cookies = r.cookies
         r = requests.post("{}://{}/{}".format("http", site, "users/login_do/"), data={'login':login, 'password':password, 'json':1}, cookies = self.cookies, timeout=self.timeout)
-        self.site = site
+        try:
+            if json.loads(r.text)['result'] != 'success':
+                raise ValueError("Authentication failed")
+        except ValueError as e:
+            raise ValueError("Authentication failed")
+
 
     def upload_image(self, filename, file):
         print("Uploading image {}".format(filename))
@@ -108,6 +181,18 @@ class SiteHandler():
             files={'upload[]': (filename, file, mimetypes.guess_type(filename), {'Expires': '0'})}, cookies=self.cookies,
             timeout=self.timeout
         )
+
+    def list_directories(self):
+        r = requests.post(
+            "{}://{}/{}".format("http", self.site, '/admin/data/elfinder_connector/'),
+            data={'water_mark': 0, 'cmd': 'open', 'target': '', 'init':1, 'tree': 1}, cookies=self.cookies, timeout=self.timeout
+        )
+        # print(r.text)
+        result = json.loads(r.text)
+        if not 'files' in result:
+            print(result.keys())
+            return []
+        return [x for x in result['files'] if 'volumeid' in x]
 
     def read_file_dir(self, dir, is_hash=False):
         if is_hash:
@@ -242,8 +327,44 @@ class SiteHandler():
         t = Teacher(xml = r.text)
         return t
 
-    # <a id="49482" class="delete-default" href="#" title="удалить строчку">Удалить</a>
-
-    #/udata/data/delete/49487/
-
-    #/ data / addObject / 931 /
+    def replace_file(self, file, binary_data, original_data, verbosity=0):
+        if verbosity > 1:
+            print("Удаляю старую картинку с сайта ({})".format(hash))
+        uploaded = False
+        deleted = False
+        try:
+            self.delete_file_by_hash(hash)
+            deleted = True
+            if verbosity > 1:
+                print("Закачиваю картинку на сайт (tagret={})".format(file['phash']))
+            self.upload_file_new(file['name'], binary_data, file['phash'])
+            uploaded = True
+        except Exception as e:
+            if verbosity > 0:
+                print("Произошла исключительная ситуация.")
+                traceback.print_exc()
+            if deleted and not uploaded:
+                if verbosity > 0:
+                    print("Внимание! Файл удален но копия не загружена. Попытка повторить загрузку.")
+                try:
+                    self.upload_file_new(file['name'], binary_data, file['phash'])
+                    if verbosity > 0:
+                        print("Успешно")
+                except Exception:
+                    if verbosity > 0:
+                        traceback.print_exc()
+                        print("Безуспешно. Попытка вернуть старый файл.")
+                    try:
+                        self.upload_file_new(file['name'], original_data, file['phash'])
+                        if verbosity > 0:
+                            print("Успешно")
+                    except Exception:
+                        if verbosity > 0:
+                            traceback.print_exc()
+                            print("Безуспешно. Остановка работы сценария.")
+                            return False
+            if isinstance(e, KeyboardInterrupt):
+                raise KeyboardInterrupt()
+            else:
+                if verbosity > 0:
+                    print("Попытка продолжить работу.")
